@@ -1,7 +1,7 @@
 {
-  "name": "ModeratorButtons",
-  "description": "SCAN — ищет компоненты модерации",
-  "authors": [{ "name": "you", "id": "0" }],
-  "main": "index.js",
-  "hash": "6262187e1f9369cb3a8d6923fe4985c8affc1ca3312ae202bc136b683421bb66"
+    "name": "FakeModButtons",
+    "description": "Показывает оригинальные кнопки «Действия модератора» на всех серверах.",
+    "authors": [{"name": "ТвойНик", "id": "ТВОЙ_ID"}],
+    "main": "index.js",
+    "hash": "ad1d0bbaf0b946effb6a4f4bf2eda8a4834b51ad72f3406ca1d8904743747745"
 }
