@@ -3,5 +3,5 @@
     "description": "Показывает оригинальные кнопки «Действия модератора» на всех серверах.",
     "authors": [{"name": "ТвойНик", "id": "ТВОЙ_ID"}],
     "main": "index.js",
-    "hash": "ad1d0bbaf0b946effb6a4f4bf2eda8a4834b51ad72f3406ca1d8904743747745"
+    "hash": "6545e35a3d2fbf8ad50ec2e65ff5e7e4ee5fa7cb6a1dfd8b91ac620465fab282"
 }
