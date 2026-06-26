@@ -1,7 +1,7 @@
 {
   "name": "ModeratorButtons",
-  "description": "Показывает секцию 'Действия модератора' в профиле на всех серверах. Если есть права — работает, если нет — визуал.",
+  "description": "SCAN — ищет компоненты модерации",
   "authors": [{ "name": "you", "id": "0" }],
   "main": "index.js",
-  "hash": "b6c2afd87643adcdd669257a301b25a69dace74fed84b519423af642169d9456"
+  "hash": "6262187e1f9369cb3a8d6923fe4985c8affc1ca3312ae202bc136b683421bb66"
 }
