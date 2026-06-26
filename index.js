@@ -1,14 +1,12 @@
-// ModeratorButtons — Kettu / Bunny / Vendetta plugin
-// Готовый bundle для установки через URL
-
 "use strict";
+// ModeratorButtons — Kettu/Bunny/Vendetta plugin
+// Правильная структура: @vendetta/* как внешние модули через require()
 
-// Vendetta API доступен как глобальный объект `vendetta`
-const { findByProps, findByDisplayName } = vendetta.metro;
-const { after } = vendetta.patcher;
-const { React } = vendetta.metro.common;
+const { findByProps, findByDisplayName } = require("@vendetta/metro");
+const { after } = require("@vendetta/patcher");
+const { React, ReactNative: { View, Text, StyleSheet, TouchableOpacity, Alert } } = require("@vendetta/metro/common");
 
-// ── Discord internal modules ──────────────────────────────────────────────────
+// ── Discord модули ────────────────────────────────────────────────────────────
 const PermissionStore  = findByProps("can", "canManageUser");
 const Permissions      = findByProps("KICK_MEMBERS", "BAN_MEMBERS");
 const GuildActions     = findByProps("kickUser", "banUser");
@@ -17,21 +15,12 @@ const SelectedGuild    = findByProps("getGuildId", "getLastSelectedGuildId");
 const GuildMemberStore = findByProps("getMember", "getMembers");
 const UserStore        = findByProps("getCurrentUser");
 
-// React Native компоненты
-const RN = vendetta.metro.common.ReactNative
-  ?? findByProps("StyleSheet", "Alert")
-  ?? findByProps("TouchableOpacity");
-
-const { TouchableOpacity, View, Text, StyleSheet, Alert } = RN;
-
-// ── Стили ────────────────────────────────────────────────────────────────────
+// ── Стили ─────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
   row: {
     flexDirection: "row",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     gap: 8,
   },
   btn: {
@@ -41,66 +30,33 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  kick:    { backgroundColor: "#FAA61A" },
-  ban:     { backgroundColor: "#ED4245" },
-  timeout: { backgroundColor: "#5865F2" },
   disabled: { opacity: 0.38 },
-  label: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "600",
-  },
+  label: { color: "#fff", fontSize: 13, fontWeight: "600" },
 });
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────
 function hasPerm(guildId, perm) {
-  try {
-    return PermissionStore?.can?.(perm, { guild_id: guildId }) === true;
-  } catch {
-    return false;
-  }
+  try { return PermissionStore?.can?.(perm, { guild_id: guildId }) === true; }
+  catch { return false; }
 }
 
-function ask(title, msg, action) {
+function confirm(title, msg, action) {
   Alert.alert(title, msg, [
     { text: "Отмена", style: "cancel" },
     { text: "Подтвердить", style: "destructive", onPress: () => {
-      try { action(); }
-      catch (e) { Alert.alert("Ошибка", String(e)); }
+      try { action(); } catch (e) { Alert.alert("Ошибка", String(e)); }
     }},
   ]);
 }
 
-// ── Mod-actions ───────────────────────────────────────────────────────────────
-function doKick(guildId, userId) {
-  ask("⚡ Кик", "Выгнать пользователя с сервера?", () =>
-    GuildActions?.kickUser(guildId, userId)
-  );
-}
-
-function doBan(guildId, userId) {
-  ask("🔨 Бан", "Забанить пользователя (удалить сообщения за 24ч)?", () =>
-    GuildActions?.banUser(guildId, userId, 1)
-  );
-}
-
-function doTimeout(guildId, userId) {
-  const until = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  ask("⏱ Таймаут", "Дать таймаут на 10 минут?", () =>
-    ModerationStore?.timeout(guildId, userId, until)
-  );
-}
-
-// ── Компонент кнопок ─────────────────────────────────────────────────────────
+// ── Кнопки модератора ─────────────────────────────────────────────────────────
 function ModButtons({ userId }) {
   const guildId = SelectedGuild?.getGuildId?.() ?? null;
   if (!guildId) return null;
 
-  // Не показываем на своём профиле
   const me = UserStore?.getCurrentUser?.();
   if (!me || me.id === userId) return null;
 
-  // Только если пользователь — участник текущего сервера
   const member = GuildMemberStore?.getMember?.(guildId, userId);
   if (!member) return null;
 
@@ -108,7 +64,6 @@ function ModButtons({ userId }) {
   const canBan     = hasPerm(guildId, Permissions?.BAN_MEMBERS);
   const canTimeout = hasPerm(guildId, Permissions?.MODERATE_MEMBERS);
 
-  // Кнопка-фабрика
   function Btn({ label, color, can, onPress }) {
     return React.createElement(
       TouchableOpacity,
@@ -122,47 +77,58 @@ function ModButtons({ userId }) {
   }
 
   return React.createElement(
-    View, { style: styles.container },
-    React.createElement(
-      View, { style: styles.row },
-      Btn({ label: "⚡ Кик",    color: "#FAA61A", can: canKick,    onPress: () => doKick(guildId, userId) }),
-      Btn({ label: "🔨 Бан",    color: "#ED4245", can: canBan,     onPress: () => doBan(guildId, userId) }),
-      Btn({ label: "⏱ Таймаут", color: "#5865F2", can: canTimeout, onPress: () => doTimeout(guildId, userId) })
-    )
+    View, { style: styles.row },
+    React.createElement(Btn, {
+      label: "⚡ Кик", color: "#FAA61A", can: canKick,
+      onPress: () => confirm("Кик", "Выгнать пользователя?", () => GuildActions?.kickUser(guildId, userId)),
+    }),
+    React.createElement(Btn, {
+      label: "🔨 Бан", color: "#ED4245", can: canBan,
+      onPress: () => confirm("Бан", "Забанить пользователя?", () => GuildActions?.banUser(guildId, userId, 1)),
+    }),
+    React.createElement(Btn, {
+      label: "⏱ Тайм", color: "#5865F2", can: canTimeout,
+      onPress: () => confirm("Таймаут 10 мин", "Дать таймаут?", () => {
+        const until = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        ModerationStore?.timeout(guildId, userId, until);
+      }),
+    })
   );
 }
 
-// ── Список всех патчей (для очистки при выгрузке) ────────────────────────────
+// ── Патчи ─────────────────────────────────────────────────────────────────────
 const patches = [];
 
-// ── Вспомогательная функция патча ────────────────────────────────────────────
-function patchComp(obj, key, getUserId) {
-  if (!obj || typeof obj[key] !== "function") return false;
+function patchSheet(comp) {
+  if (!comp) return false;
+  const obj   = comp.default ? comp : { default: comp };
+  const orig  = obj.default;
+  if (typeof orig !== "function") return false;
 
-  const unpatch = after(key, obj, (args, res) => {
+  const unpatch = after("default", obj, (args, res) => {
     if (!res) return res;
-    const userId = getUserId(args, res);
+    const userId =
+      args?.[0]?.userId ??
+      args?.[0]?.user?.id ??
+      res?.props?.userId ??
+      res?.props?.user?.id;
     if (!userId) return res;
 
-    const modRow = React.createElement(ModButtons, { key: "kettu-mod-btns", userId });
+    const node = React.createElement(ModButtons, { key: "mod-btns", userId });
     const kids = res?.props?.children;
-
     if (Array.isArray(kids)) {
-      if (!kids.some(c => c?.key === "kettu-mod-btns")) {
-        kids.push(modRow);
-      }
+      if (!kids.some(c => c?.key === "mod-btns")) kids.push(node);
       return res;
     }
-
-    return React.createElement(React.Fragment, null, res, modRow);
+    return React.createElement(React.Fragment, null, res, node);
   });
 
   patches.push(unpatch);
   return true;
 }
 
-// ── Основная логика патчинга ──────────────────────────────────────────────────
-const SHEET_NAMES = [
+// Пробуем разные имена компонента профиля
+const NAMES = [
   "UserProfileSheet",
   "UserSheet",
   "UserInfoBase",
@@ -170,39 +136,24 @@ const SHEET_NAMES = [
   "UserProfileActionRow",
 ];
 
-let didPatch = false;
+for (const name of NAMES) {
+  const byName = findByDisplayName(name);
+  if (byName && patchSheet(byName)) break;
 
-for (const name of SHEET_NAMES) {
-  const comp = findByDisplayName(name);
-  if (!comp) continue;
-
-  const obj = comp.default ? comp : { default: comp };
-  const ok = patchComp(obj, "default", (args, res) =>
-    args?.[0]?.userId ?? args?.[0]?.user?.id ?? res?.props?.userId ?? res?.props?.user?.id
-  );
-  if (ok) { didPatch = true; break; }
-}
-
-if (!didPatch) {
-  // Запасной вариант: патчим через findByProps
-  for (const name of SHEET_NAMES) {
-    const mod = findByProps(name);
-    if (!mod) continue;
-    const ok = patchComp(mod, name, (args, res) =>
-      args?.[0]?.userId ?? args?.[0]?.user?.id ?? res?.props?.userId
-    );
-    if (ok) { didPatch = true; break; }
+  const byProps = findByProps(name);
+  if (byProps) {
+    const obj = { default: byProps[name] };
+    if (patchSheet(obj)) break;
   }
 }
 
 // ── Экспорт ───────────────────────────────────────────────────────────────────
-export default {
-  onLoad() {
-    // Патчи уже наложены выше при загрузке модуля.
-    // Если нужна отложенная инициализация — перенести сюда.
-  },
-  onUnload() {
-    patches.forEach(p => { try { p(); } catch {} });
-    patches.length = 0;
-  },
+module.exports = {
+  default: {
+    onLoad() {},
+    onUnload() {
+      patches.forEach(p => { try { p(); } catch {} });
+      patches.length = 0;
+    },
+  }
 };
