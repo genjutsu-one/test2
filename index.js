@@ -1,9 +1,8 @@
 (function () {
     "use strict";
 
-    const { React, ReactNative } = vendetta.metro.common;
-    const metro = vendetta.metro;
-    const { findByProps, findByName } = metro;
+    const { React, ReactNative: RN } = vendetta.metro.common;
+    const { findByProps, findByName } = vendetta.metro;
     const patcher = vendetta.patcher;
     const { after, before } = patcher;
     const { showToast } = vendetta.ui.toasts;
@@ -16,8 +15,7 @@
 
     let patches = [];
 
-    // Проверка реальных прав
-    function hasModPermissions(guildId) {
+    function hasRealPermissions(guildId) {
         try {
             const MemberStore = findByProps("getSelfMember");
             const Perms = findByProps("Permissions");
@@ -26,114 +24,91 @@
             const member = MemberStore.getSelfMember(guildId);
             if (!member?.permissions) return false;
 
-            const perms = BigInt(member.permissions);
-            return !!(perms & BigInt(Perms.MANAGE_MESSAGES)) ||
-                   !!(perms & BigInt(Perms.KICK_MEMBERS)) ||
-                   !!(perms & BigInt(Perms.BAN_MEMBERS)) ||
-                   !!(perms & BigInt(Perms.MODERATE_MEMBERS));
-        } catch (e) {
-            return false;
-        }
+            const p = BigInt(member.permissions);
+            return !!(p & BigInt(Perms.MODERATE_MEMBERS)) ||
+                   !!(p & BigInt(Perms.KICK_MEMBERS)) ||
+                   !!(p & BigInt(Perms.BAN_MEMBERS)) ||
+                   !!(p & BigInt(Perms.MANAGE_MESSAGES));
+        } catch (e) { return false; }
     }
 
-    function getCurrentGuildId() {
+    function getGuildId() {
         return findByProps("getGuildId")?.getGuildId?.() || null;
     }
 
-    // Основной патч — заставляем показывать секцию модератора
-    function patchModeratorSection() {
-        try {
-            // Ищем компонент профиля пользователя
-            const UserProfile = findByName("UserProfile", false) ||
-                               findByProps("UserProfile")?.default ||
-                               findByProps("renderModeratorActions");
+    // === Патч 1: Принудительно показываем секцию модератора ===
+    function patchUserProfile() {
+        const UserProfileComponent = findByName("UserProfile") || 
+                                     findByProps("UserProfile")?.default;
 
-            if (!UserProfile) {
-                console.warn("[FakeMod] UserProfile not found");
-                return false;
+        if (!UserProfileComponent) return false;
+
+        patches.push(after("default", UserProfileComponent, (args, ret) => {
+            try {
+                const guildId = args[0]?.guildId || getGuildId();
+                const isRealMod = hasRealPermissions(guildId);
+
+                const forceModSection = (node) => {
+                    if (!node || typeof node !== "object") return node;
+
+                    // Ищем заголовок "Действия модератора"
+                    if (node.props?.label === "Действия модератора" || 
+                        (Array.isArray(node.props?.children) && 
+                         node.props.children.some(c => c?.props?.label === "Тайм-аут"))) {
+                        
+                        if (node.props) {
+                            node.props.hidden = false;
+                            if (node.props.style) node.props.style.opacity = isRealMod ? 1 : 0.9;
+                        }
+                    }
+
+                    if (Array.isArray(node.props?.children)) {
+                        node.props.children = node.props.children.map(forceModSection);
+                    } else if (node.props?.children) {
+                        node.props.children = forceModSection(node.props.children);
+                    }
+                    return node;
+                };
+
+                return forceModSection(ret);
+            } catch (e) {
+                console.error("[FakeMod] profile error:", e);
             }
-
-            patches.push(after("default", UserProfile, (args, ret) => {
-                try {
-                    const guildId = args[0]?.guildId || getCurrentGuildId();
-                    const isRealMod = hasModPermissions(guildId);
-
-                    // Ищем внутри рендера секцию с модераторскими действиями
-                    // Discord обычно использует что-то вроде ModeratorActions или similar
-                    const children = ret?.props?.children || ret;
-                    if (!children) return ret;
-
-                    // Рекурсивно ищем и форсируем показ
-                    const forceShowModActions = (node) => {
-                        if (!node || typeof node !== "object") return;
-
-                        if (node.props?.label === "Действия модератора" || 
-                            node.props?.children?.some?.(c => c?.props?.label === "Тайм-аут")) {
-                            if (node.props) {
-                                node.props.hidden = false;
-                                node.props.style = { ...node.props.style, opacity: isRealMod ? 1 : 0.85 };
-                            }
-                        }
-
-                        if (Array.isArray(node.props?.children)) {
-                            node.props.children.forEach(forceShowModActions);
-                        } else if (node.props?.children) {
-                            forceShowModActions(node.props.children);
-                        }
-                    };
-
-                    forceShowModActions(children);
-
-                    // Если секции нет — можно попробовать добавить, но лучше патчить permission check
-                } catch (e) {
-                    console.error("[FakeMod] profile patch error:", e);
-                }
-                return ret;
-            }));
-
-            return true;
-        } catch (e) {
-            console.error("[FakeMod] patchModeratorSection error:", e);
-            return false;
-        }
+            return ret;
+        }));
+        return true;
     }
 
-    // Патч на проверку прав (самое важное)
-    function patchPermissionChecks() {
-        try {
-            // Многие проверки прав идут через canManageUser или similar
-            const PermissionUtils = findByProps("can", "canManageUser", "canKick") || 
-                                   findByProps("canModerate");
+    // === Патч 2: Обходим проверки прав ===
+    function patchPermissions() {
+        const canFunc = findByProps("can", "canManageUser", "canKick", "canBan") || 
+                       findByProps("canModerate");
 
-            if (PermissionUtils) {
-                patches.push(before("can", PermissionUtils, (args) => {
-                    const [action, guildId] = args;
-                    if (["kick", "ban", "timeout", "moderate"].some(a => action?.toLowerCase().includes(a))) {
-                        // Разрешаем показ кнопок
-                        return [action, guildId]; // продолжаем, но ниже можем перехватить действие
-                    }
-                }));
+        if (!canFunc) return false;
 
-                patches.push(after("can", PermissionUtils, (args, res) => {
-                    const action = args[0];
-                    if (["kick", "ban", "timeout", "moderate", "MANAGE"].some(a => String(action).includes(a))) {
-                        return true; // форсируем true для UI
-                    }
-                    return res;
-                }));
+        // before — разрешаем вызов
+        patches.push(before("can", canFunc, (args) => {
+            const perm = args[0];
+            if (typeof perm === "string" && /kick|ban|timeout|moderate|manage/i.test(perm)) {
+                return args; // пропускаем дальше
             }
+        }));
 
-            return true;
-        } catch (e) {
-            console.error("[FakeMod] permission patch error:", e);
-            return false;
-        }
+        // after — возвращаем true для UI
+        patches.push(after("can", canFunc, (args, result) => {
+            const perm = args[0];
+            if (typeof perm === "string" && /kick|ban|timeout|moderate|manage/i.test(perm)) {
+                return true;
+            }
+            return result;
+        }));
+
+        return true;
     }
 
-    function handleFakeAction(type) {
-        if (storage.showFakeToast) {
-            showToast(`❌ У тебя нет прав на ${type}. Это только визуал.`, { variant: "error" });
-        }
+    // === Перехват реальных действий (чтобы не падало) ===
+    function patchActions() {
+        // Можно добавить позже, если нужно
     }
 
     function Settings() {
@@ -146,38 +121,30 @@
             showToast("✅ Настройки сохранены");
         };
 
-        return React.createElement(ReactNative.ScrollView, null,
-            React.createElement(Forms.FormSection, { title: "Fake Moderator" },
-                React.createElement(Forms.FormSwitch, {
-                    label: "Включить плагин",
-                    value: enabled,
-                    onValueChange: setEnabled
-                }),
-                React.createElement(Forms.FormSwitch, {
-                    label: "Показывать уведомление при нажатии",
-                    value: toast,
-                    onValueChange: setToast
-                })
+        return React.createElement(RN.ScrollView, null,
+            React.createElement(Forms.FormSection, { title: "Fake Moderator Buttons" },
+                React.createElement(Forms.FormSwitch, { label: "Включён", value: enabled, onValueChange: setEnabled }),
+                React.createElement(Forms.FormSwitch, { label: "Показывать тост при нажатии", value: toast, onValueChange: setToast })
             ),
-            React.createElement(Forms.FormRow, { label: "Сохранить изменения", onPress: save })
+            React.createElement(Forms.FormRow, { label: "💾 Сохранить", onPress: save })
         );
     }
 
     function onLoad() {
         if (!storage.enabled) return;
 
-        const p1 = patchModeratorSection();
-        const p2 = patchPermissionChecks();
+        const p1 = patchUserProfile();
+        const p2 = patchPermissions();
 
         if (p1 || p2) {
-            showToast("✅ FakeModButtons загружен\nОригинальные кнопки модератора включены");
+            showToast("✅ FakeModButtons загружен\nПопробуй открыть профиль пользователя");
         } else {
-            showToast("⚠️ Не удалось найти нужные компоненты");
+            showToast("⚠️ Не все компоненты найдены. Возможно нужна перезагрузка Discord");
         }
     }
 
     function onUnload() {
-        patches.forEach(p => { try { p(); } catch {} });
+        patches.forEach(p => { try { p(); } catch (e) {} });
         patches = [];
     }
 
