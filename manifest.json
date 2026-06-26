@@ -1,12 +1,12 @@
 {
-  "name": "ModPanel",
-  "description": "Visual moderator buttons in user context menu. Permission-checked — won't work where you're not a mod.",
+  "name": "ModeratorButtons",
+  "description": "Показывает кнопки модератора (кик, бан, таймаут) в профиле пользователя на всех серверах. Если у тебя есть права — всё работает. Если нет — только визуал.",
   "authors": [
     {
-      "name": "Sakura",
-      "id": "000000000000000000"
+      "name": "you",
+      "id": "0"
     }
   ],
   "main": "index.js",
-  "hash": "3ea9019059826ea6d35d6b709322d8d2b400301107ba4c6984ebc33779bbefdd"
+  "hash": ""
 }
