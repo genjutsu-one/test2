@@ -1,186 +1,128 @@
 "use strict";
-// ModeratorButtons — Kettu/Bunny/Vendetta plugin
-// Стратегия: найти компонент секции "Действия модератора" и убрать
-// проверку прав, чтобы она показывалась всегда (disabled если нет прав)
+// DIAGNOSTIC PLUGIN — находит компоненты профиля и показывает в Alert
 
-const { findByProps, findByDisplayName } = require("@vendetta/metro");
-const { before, after, instead } = require("@vendetta/patcher");
-const { React, ReactNative: { View, Text, StyleSheet, TouchableOpacity, Alert } } = require("@vendetta/metro/common");
-
-const PermissionStore  = findByProps("can", "canManageUser");
-const Permissions      = findByProps("KICK_MEMBERS", "BAN_MEMBERS");
-const GuildActions     = findByProps("kickUser", "banUser");
-const ModerationStore  = findByProps("timeout", "removeTimeout");
-const SelectedGuild    = findByProps("getGuildId", "getLastSelectedGuildId");
-const GuildMemberStore = findByProps("getMember", "getMembers");
-const UserStore        = findByProps("getCurrentUser");
+const { findByProps, findByDisplayName, getAssetIDByName } = require("@vendetta/metro");
+const { after } = require("@vendetta/patcher");
+const { React, ReactNative: { Alert } } = require("@vendetta/metro/common");
 
 const patches = [];
+let alerted = false;
 
-function hasPerm(guildId, perm) {
-    try { return PermissionStore?.can?.(perm, { guild_id: guildId }) === true; }
-    catch { return false; }
-}
+// Ищем модули связанные с профилем и модерацией
+function findRelevantModules() {
+    const results = [];
 
-function confirm(title, msg, action) {
-    Alert.alert(title, msg, [
-        { text: "Отмена", style: "cancel" },
-        { text: "Подтвердить", style: "destructive", onPress: () => {
-            try { action(); } catch (e) { Alert.alert("Ошибка", String(e)); }
-        }},
-    ]);
-}
+    const searchTerms = [
+        ["canKick", "canBan"],
+        ["kickUser", "banUser"],
+        ["KICK_MEMBERS", "BAN_MEMBERS"],
+        ["ModerationSection"],
+        ["moderatorActions"],
+        ["UserProfileSheet"],
+        ["UserSheet"],
+        ["UserProfile"],
+        ["UserProfileBody"],
+        ["MemberSafety"],
+        ["ProfileBody"],
+        ["UserSummaryItem"],
+    ];
 
-// ── Стили для fallback-кнопок (если нативный UI не найден) ──────────────────
-const styles = StyleSheet.create({
-    section: { marginHorizontal: 12, marginVertical: 6, borderRadius: 12, backgroundColor: "#1e1f22", overflow: "hidden" },
-    sectionTitle: { color: "#b5bac1", fontSize: 12, fontWeight: "700", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
-    row: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14 },
-    rowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#2b2d31" },
-    icon: { fontSize: 18, marginRight: 14, width: 24, textAlign: "center" },
-    rowLabel: { fontSize: 16, fontWeight: "500", color: "#dbdee1" },
-    rowLabelDanger: { color: "#f23f43" },
-    rowLabelDisabled: { color: "#4e5058" },
-});
-
-function FallbackModSection({ userId, guildId }) {
-    const canManage  = hasPerm(guildId, Permissions?.MANAGE_MEMBERS ?? 0n);
-    const canTimeout = hasPerm(guildId, Permissions?.MODERATE_MEMBERS ?? 0n);
-    const canKick    = hasPerm(guildId, Permissions?.KICK_MEMBERS ?? 0n);
-    const canBan     = hasPerm(guildId, Permissions?.BAN_MEMBERS ?? 0n);
-
-    function Row({ icon, label, danger, can, onPress, border }) {
-        return React.createElement(
-            TouchableOpacity,
-            { style: [styles.row, border && styles.rowBorder], activeOpacity: can ? 0.6 : 1, onPress: can ? onPress : undefined },
-            React.createElement(Text, { style: [styles.icon, !can && { color: "#4e5058" }] }, icon),
-            React.createElement(Text, { style: [styles.rowLabel, danger && styles.rowLabelDanger, !can && styles.rowLabelDisabled] }, label)
-        );
-    }
-
-    return React.createElement(
-        View, { style: styles.section },
-        React.createElement(Text, { style: styles.sectionTitle }, "Действия модератора"),
-        Row({ icon: "⚙️", label: "Управление", danger: false, can: canManage,  border: false,
-              onPress: () => Alert.alert("Управление", "Перейдите в настройки участника") }),
-        Row({ icon: "⏱", label: "Тайм-аут",  danger: false, can: canTimeout, border: true,
-              onPress: () => confirm("Тайм-аут 10 мин", "Дать тайм-аут?", () => {
-                  ModerationStore?.timeout(guildId, userId, new Date(Date.now() + 10*60*1000).toISOString());
-              }) }),
-        Row({ icon: "👢", label: "Выгнать",   danger: true,  can: canKick,    border: true,
-              onPress: () => confirm("Выгнать", "Выгнать пользователя с сервера?", () => GuildActions?.kickUser(guildId, userId)) }),
-        Row({ icon: "🔨", label: "Забанить",  danger: true,  can: canBan,     border: true,
-              onPress: () => confirm("Забанить", "Забанить пользователя?", () => GuildActions?.banUser(guildId, userId, 1)) })
-    );
-}
-
-// ── Стратегия 1: патч компонента, который скрывает/показывает секцию ─────────
-// Discord рендерит что-то вроде: canKick || canBan || canTimeout ? <ModSection/> : null
-// Ищем по findByProps с характерными ключами
-
-function tryPatchByProps(...propNames) {
-    const mod = findByProps(...propNames);
-    if (!mod) return false;
-
-    for (const key of Object.keys(mod)) {
-        if (typeof mod[key] !== "function") continue;
-        const src = mod[key].toString();
-        // Ищем функции, которые проверяют canKick/canBan и что-то рендерят
-        if (!(src.includes("canKick") || src.includes("KICK_MEMBERS") || src.includes("kickUser") || src.includes("ModerationAction"))) continue;
-
-        const unpatch = instead(key, mod, (args, orig) => {
-            // Подменяем проверки прав на true
-            if (args[0] && typeof args[0] === "object") {
-                const fakeArgs = { ...args[0], canKick: true, canBan: true, canTimeout: true, canManageMember: true };
-                return orig(fakeArgs, ...args.slice(1));
+    for (const terms of searchTerms) {
+        try {
+            const mod = findByProps(...terms);
+            if (mod) {
+                const keys = Object.keys(mod).filter(k => typeof mod[k] === "function").slice(0, 5);
+                results.push(`[${terms.join(",")}] → keys: ${keys.join(", ")}`);
             }
-            return orig(...args);
-        });
-        patches.push(unpatch);
-        return true;
+        } catch {}
     }
-    return false;
-}
 
-// ── Стратегия 2: патч UserSheet/профиля — добавляем секцию если её нет ──────
-function tryPatchProfileSheet() {
-    const NAMES = [
+    const displayNames = [
         "UserProfileSheet", "UserSheet", "UserProfile",
-        "UserInfoBase", "UserInfo", "MemberSafetySection",
-        "UserProfileBody", "ProfileBody",
+        "UserProfileBody", "ProfileBody", "UserInfoBase",
+        "UserInfo", "MemberCard", "UserCard",
+        "ModerationSection", "ModeratorActions",
     ];
 
-    for (const name of NAMES) {
-        const comp = findByDisplayName(name) ?? findByProps(name)?.[name];
-        if (!comp) continue;
-
-        const target = comp.default ? comp : { default: comp };
-        if (typeof target.default !== "function") continue;
-
-        const unpatch = after("default", target, (args, res) => {
-            if (!res) return res;
-            const userId = args?.[0]?.userId ?? args?.[0]?.user?.id ?? res?.props?.userId;
-            if (!userId) return res;
-
-            const guildId = SelectedGuild?.getGuildId?.();
-            if (!guildId) return res;
-
-            const me = UserStore?.getCurrentUser?.();
-            if (!me || me.id === userId) return res;
-
-            const member = GuildMemberStore?.getMember?.(guildId, userId);
-            if (!member) return res;
-
-            // Проверяем — есть ли уже секция модератора в дереве (если ты модер)
-            const resStr = JSON.stringify(res)?.toLowerCase() ?? "";
-            const hasModSection = resStr.includes("moderat") || resStr.includes("kickuser") || resStr.includes("banuser");
-            if (hasModSection) return res; // уже есть — не дублируем
-
-            const modNode = React.createElement(FallbackModSection, { key: "mod-section", userId, guildId });
-            const kids = res?.props?.children;
-            if (Array.isArray(kids)) {
-                // Вставляем после первых 2 элементов (после кнопок Add Friend, Message etc)
-                const insertIdx = Math.min(2, kids.length);
-                const newKids = [...kids.slice(0, insertIdx), modNode, ...kids.slice(insertIdx)];
-                return { ...res, props: { ...res.props, children: newKids } };
-            }
-            return React.createElement(React.Fragment, null, res, modNode);
-        });
-
-        patches.push(unpatch);
-        return true;
+    for (const name of displayNames) {
+        try {
+            const comp = findByDisplayName(name);
+            if (comp) results.push(`displayName: ${name} FOUND`);
+        } catch {}
     }
-    return false;
+
+    return results;
 }
 
-// ── Стратегия 3: патч самого условия — ищем модуль с проверкой canKick ──────
-function tryPatchPermCheck() {
-    // Ищем модуль который решает показывать ли секцию
-    const candidates = [
-        findByProps("canKick", "canBan"),
-        findByProps("kickUser", "canKick"),
-        findByProps("ModerationActionKick"),
-        findByProps("ModerationActionBan"),
-    ];
+// Патчим профиль чтобы поймать дерево компонентов
+function scanTree(node, depth, results) {
+    if (!node || depth > 4) return;
+    if (typeof node !== "object") return;
 
-    for (const mod of candidates) {
-        if (!mod) continue;
-        for (const key of ["canKick", "canBan", "canTimeout", "canManageMember"]) {
-            if (key in mod && typeof mod[key] === "function") {
-                const unpatch = instead(key, mod, () => true);
-                patches.push(unpatch);
-            }
+    const type = node.type;
+    if (type) {
+        const name = type.displayName || type.name || (typeof type === "string" ? type : null);
+        if (name && name.length > 2 && !["View","Text","TouchableOpacity","Animated"].includes(name)) {
+            results.add(name);
         }
-        if (patches.length > 0) return true;
     }
-    return false;
+    const kids = node.props?.children;
+    if (Array.isArray(kids)) kids.forEach(k => scanTree(k, depth+1, results));
+    else if (kids) scanTree(kids, depth+1, results);
 }
 
-// Запускаем все стратегии
-tryPatchByProps("canKick", "canBan");
-tryPatchByProps("kickUser", "banUser");
-tryPatchPermCheck();
-tryPatchProfileSheet();
+// Пробуем поймать через findByProps с широким поиском
+const UserStore = findByProps("getCurrentUser");
+const SelectedGuild = findByProps("getGuildId", "getLastSelectedGuildId");
+
+// Патчим React.createElement чтобы поймать нужные компоненты
+let capturedNames = new Set();
+let patchCount = 0;
+
+const origCreate = React.createElement.bind(React);
+React.createElement = function(type, props, ...children) {
+    if (patchCount < 5000 && props && typeof type === "function") {
+        const name = type.displayName || type.name;
+        if (name && props.userId) {
+            capturedNames.add(`${name} (has userId)`);
+        }
+        if (name && (props.guildId || props.guild_id)) {
+            capturedNames.add(`${name} (has guildId)`);
+        }
+        if (name && (String(props).includes("kick") || String(name).toLowerCase().includes("moderat"))) {
+            capturedNames.add(`MOD: ${name}`);
+        }
+        patchCount++;
+    }
+    return origCreate(type, props, ...children);
+};
+
+patches.push(() => { React.createElement = origCreate; });
+
+// Через 5 секунд показываем что нашли
+setTimeout(() => {
+    if (alerted) return;
+    alerted = true;
+
+    const modResults = findRelevantModules();
+    const captured = Array.from(capturedNames).slice(0, 20);
+
+    const msg = [
+        "=== MODULES ===",
+        ...modResults.slice(0, 10),
+        "",
+        "=== CAPTURED ===",
+        ...captured,
+    ].join("\n");
+
+    Alert.alert("ModDiag", msg);
+}, 5000);
+
+// Через 15 сек — второй алерт с именами компонентов из дерева
+setTimeout(() => {
+    const msg2 = Array.from(capturedNames).join("\n") || "nothing captured";
+    Alert.alert("ModDiag2", msg2.slice(0, 1000));
+}, 15000);
 
 module.exports = {
     default: {
@@ -188,6 +130,7 @@ module.exports = {
         onUnload() {
             patches.forEach(p => { try { p(); } catch {} });
             patches.length = 0;
+            React.createElement = origCreate;
         },
     }
 };
